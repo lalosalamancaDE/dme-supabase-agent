@@ -493,7 +493,7 @@ function displayAudioResponse(audioData, responseDiv) {
     }
 }
 
-// Send text message
+// Send text message with infinite timeout
 async function sendTextMessage() {
     const messageInput = document.getElementById('textInput');
     const sendButton = document.getElementById('sendButton');
@@ -511,6 +511,9 @@ async function sendTextMessage() {
         sendButton.disabled = true;
         sendButton.textContent = 'Sending...';
 
+        // Create AbortController but don't set any timeout (infinite)
+        const controller = new AbortController();
+        
         const response = await fetch('/api/message', {
             method: 'POST',
             headers: {
@@ -519,30 +522,31 @@ async function sendTextMessage() {
             body: JSON.stringify({
                 message: message,
                 sessionId: currentSessionId
-            })
+            }),
+            signal: controller.signal,
+            // Add keep-alive headers to prevent connection drops
+            keepalive: true
         });
 
         const result = await response.json();
-
+        
         if (response.ok) {
             console.log('✅ Text message sent successfully:', result);
             updateStatus('Message sent', '');
             
             if (result.response && result.response !== "") {
-                // Extract the bot message from the nested response
                 const botResponse = result.response.bot || result.response;
                 updateResponse(botResponse);
             } else {
                 updateResponse('Message sent successfully to n8n workflow');
             }
-                        
+            
             messageInput.value = '';
         } else {
             console.error('❌ Error sending message:', result);
             updateStatus('Send failed', 'error');
             updateResponse(result.error || 'Failed to send message', true);
         }
-
     } catch (error) {
         console.error('❌ Network error:', error);
         updateStatus('Network error', 'error');
@@ -558,6 +562,7 @@ async function sendTextMessage() {
         }
     }
 }
+
 
 // Recording functions
 function toggleRecording() {
@@ -657,6 +662,7 @@ function resetRecordingUI() {
     }
 }
 
+// Process recording with infinite timeout
 async function processRecording() {
     try {
         console.log('🔄 Processing recording...');
@@ -670,20 +676,26 @@ async function processRecording() {
 
         console.log('📤 Uploading voice to server...');
         updateStatus('Uploading voice...', 'processing');
-
+        
         const formData = new FormData();
         formData.append('audio', audioBlob, 'recording.webm');
         formData.append('sessionId', currentSessionId);
         formData.append('timestamp', new Date().toISOString());
 
+        // Create AbortController but don't set any timeout (infinite)
+        const controller = new AbortController();
+        
         const response = await fetch('/api/upload-voice', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: controller.signal,
+            // Add keep-alive headers to prevent connection drops
+            keepalive: true
         });
 
         console.log('Response status:', response.status);
         console.log('Response headers:', response.headers);
-
+        
         if (!response.ok) {
             const errorText = await response.text();
             throw new Error(`HTTP ${response.status}: ${errorText}`);
@@ -692,7 +704,7 @@ async function processRecording() {
         // Check if response is JSON or audio
         const contentType = response.headers.get('content-type');
         console.log('Content-Type:', contentType);
-
+        
         if (contentType && contentType.includes('application/json')) {
             // Handle JSON response
             const result = await response.json();
@@ -714,7 +726,6 @@ async function processRecording() {
             displayVoiceResponse(audioUrl);
             updateStatus('Voice processed', '');
         }
-
     } catch (error) {
         console.error('❌ Processing error:', error);
         updateStatus('Processing failed', 'error');
@@ -784,12 +795,18 @@ function displayVoiceResponse(audioUrl) {
     }
 }
 
-// Health check function
+// Health check with infinite timeout
 async function performHealthCheck() {
     try {
         updateStatus('Running health check...', 'processing');
         
-        const response = await fetch("/api/health");
+        // Create AbortController but don't set any timeout (infinite)
+        const controller = new AbortController();
+        
+        const response = await fetch("/api/health", {
+            signal: controller.signal,
+            keepalive: true
+        });
         
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -802,7 +819,6 @@ async function performHealthCheck() {
         }
         
         const result = await response.json();
-
         console.log('✅ Health check passed:', result);
         updateStatus('System healthy', '');
         updateResponse(`✅ API Good, Status Good - System is running properly`);
