@@ -383,67 +383,6 @@ function downloadImage() {
     }
 }
 
-// NEW: Initialize streaming response display
-function initializeStreamingResponse() {
-    const responseDiv = document.getElementById('response');
-    if (!responseDiv) return;
-    
-    responseDiv.innerHTML = `
-        <div class="success-message">✅ <strong>Response:</strong></div>
-        <div class="formatted-content streaming-content" id="streamingContent"></div>
-    `;
-    
-    return document.getElementById('streamingContent');
-}
-
-// NEW: Append streaming content
-function appendStreamingContent(content) {
-    const streamingContent = document.getElementById('streamingContent');
-    if (!streamingContent) return;
-    
-    // Escape HTML to prevent injection but preserve newlines
-    const escapedContent = content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#x27;')
-        .replace(/\n/g, '<br>');
-    
-    streamingContent.innerHTML += escapedContent;
-    
-    // Auto-scroll to bottom
-    streamingContent.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-// NEW: Finalize streaming response with formatting
-function finalizeStreamingResponse() {
-    const streamingContent = document.getElementById('streamingContent');
-    if (!streamingContent) return;
-    
-    // Get the accumulated text content
-    const fullText = streamingContent.textContent || streamingContent.innerText || '';
-    
-    // Apply property formatting to the complete response
-    const formattedContent = formatPropertyText(fullText);
-    
-    // Replace the streaming content with formatted version
-    const responseDiv = document.getElementById('response');
-    if (responseDiv) {
-        responseDiv.innerHTML = `
-            <div class="success-message">✅ <strong>Response:</strong></div>
-            <div class="formatted-content">${formattedContent}</div>
-        `;
-    }
-    
-    // Trigger Arabic detection
-    if (typeof detectAndSetArabic === 'function') {
-        detectAndSetArabic();
-    }
-    
-    responseDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
 // Update response display
 function updateResponse(content, isError = false) {
     const responseDiv = document.getElementById('response');
@@ -554,92 +493,7 @@ function displayAudioResponse(audioData, responseDiv) {
     }
 }
 
-// NEW: Handle streaming response
-async function handleStreamingResponse(response) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let streamingContentElement = null;
-    
-    try {
-        console.log('📡 Starting to read streaming response...');
-        updateStatus('Receiving response...', 'processing');
-        
-        while (true) {
-            const { done, value } = await reader.read();
-            
-            if (done) {
-                console.log('✅ Stream completed');
-                break;
-            }
-            
-            // Decode the chunk and add to buffer
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
-            
-            // Process complete JSON objects (separated by newlines)
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line in buffer
-            
-            for (const line of lines) {
-                if (!line.trim()) continue;
-                
-                try {
-                    const data = JSON.parse(line.trim());
-                    console.log('📦 Received chunk:', data);
-                    
-                    if (data.type === 'begin') {
-                        // Initialize streaming display
-                        streamingContentElement = initializeStreamingResponse();
-                        updateStatus('Streaming response...', 'processing');
-                    } else if (data.type === 'item' && data.content) {
-                        // Append content chunk
-                        if (streamingContentElement) {
-                            appendStreamingContent(data.content);
-                        }
-                    } else if (data.type === 'end') {
-                        // Finalize response with formatting
-                        finalizeStreamingResponse();
-                        updateStatus('Response received', '');
-                        console.log('✅ Streaming response completed');
-                        return;
-                    }
-                } catch (parseError) {
-                    console.error('❌ Error parsing chunk:', parseError, 'Raw chunk:', line);
-                    // Continue processing other chunks
-                }
-            }
-        }
-        
-        // Handle any remaining buffer content
-        if (buffer.trim()) {
-            try {
-                const data = JSON.parse(buffer.trim());
-                if (data.type === 'item' && data.content && streamingContentElement) {
-                    appendStreamingContent(data.content);
-                } else if (data.type === 'end') {
-                    finalizeStreamingResponse();
-                    updateStatus('Response received', '');
-                }
-            } catch (parseError) {
-                console.error('❌ Error parsing final buffer:', parseError);
-            }
-        }
-        
-        // Ensure response is finalized
-        finalizeStreamingResponse();
-        updateStatus('Response received', '');
-        
-    } catch (error) {
-        console.error('❌ Streaming error:', error);
-        updateStatus('Streaming failed', 'error');
-        updateResponse(`Streaming error: ${error.message}`, true);
-    } finally {
-        reader.releaseLock();
-    }
-}
-
-// MODIFIED: Send text message with streaming support
+// Send text message with infinite timeout
 async function sendTextMessage() {
     const messageInput = document.getElementById('textInput');
     const sendButton = document.getElementById('sendButton');
@@ -657,40 +511,28 @@ async function sendTextMessage() {
         sendButton.disabled = true;
         sendButton.textContent = 'Sending...';
 
+        // Create AbortController but don't set any timeout (infinite)
         const controller = new AbortController();
         
         const response = await fetch('/api/message', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'text/plain' // Accept streaming response
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({
                 message: message,
                 sessionId: currentSessionId
             }),
             signal: controller.signal,
+            // Add keep-alive headers to prevent connection drops
             keepalive: true
         });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
-        }
+        const result = await response.json();
         
-        console.log('✅ Text message sent, processing streaming response...');
-        messageInput.value = '';
-        
-        // Check if response is streaming or regular JSON
-        const contentType = response.headers.get('content-type');
-        
-        if (contentType && contentType.includes('text/plain')) {
-            // Handle streaming response
-            await handleStreamingResponse(response);
-        } else {
-            // Handle regular JSON response (fallback)
-            const result = await response.json();
-            console.log('✅ Regular JSON response:', result);
+        if (response.ok) {
+            console.log('✅ Text message sent successfully:', result);
+            updateStatus('Message sent', '');
             
             if (result.response && result.response !== "") {
                 const botResponse = result.response.bot || result.response;
@@ -698,9 +540,13 @@ async function sendTextMessage() {
             } else {
                 updateResponse('Message sent successfully to n8n workflow');
             }
-            updateStatus('Message sent', '');
+            
+            messageInput.value = '';
+        } else {
+            console.error('❌ Error sending message:', result);
+            updateStatus('Send failed', 'error');
+            updateResponse(result.error || 'Failed to send message', true);
         }
-        
     } catch (error) {
         console.error('❌ Network error:', error);
         updateStatus('Network error', 'error');
@@ -716,6 +562,7 @@ async function sendTextMessage() {
         }
     }
 }
+
 
 // Recording functions
 function toggleRecording() {
@@ -815,7 +662,7 @@ function resetRecordingUI() {
     }
 }
 
-// MODIFIED: Process recording with streaming support
+// Process recording with infinite timeout
 async function processRecording() {
     try {
         console.log('🔄 Processing recording...');
@@ -835,15 +682,14 @@ async function processRecording() {
         formData.append('sessionId', currentSessionId);
         formData.append('timestamp', new Date().toISOString());
 
+        // Create AbortController but don't set any timeout (infinite)
         const controller = new AbortController();
         
         const response = await fetch('/api/upload-voice', {
             method: 'POST',
-            headers: {
-                'Accept': 'text/plain' // Accept streaming response for voice too
-            },
             body: formData,
             signal: controller.signal,
+            // Add keep-alive headers to prevent connection drops
             keepalive: true
         });
 
@@ -855,14 +701,11 @@ async function processRecording() {
             throw new Error(`HTTP ${response.status}: ${errorText}`);
         }
 
-        // Check if response is streaming or regular content
+        // Check if response is JSON or audio
         const contentType = response.headers.get('content-type');
         console.log('Content-Type:', contentType);
         
-        if (contentType && contentType.includes('text/plain')) {
-            // Handle streaming response
-            await handleStreamingResponse(response);
-        } else if (contentType && contentType.includes('application/json')) {
+        if (contentType && contentType.includes('application/json')) {
             // Handle JSON response
             const result = await response.json();
             console.log('Parsed JSON result:', result);
